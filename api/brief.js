@@ -5,7 +5,7 @@
  */
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-sonnet-4-6';
 const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 const cache = { morning: null, aftermarket: null };
