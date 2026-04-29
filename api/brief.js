@@ -140,7 +140,7 @@ Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
 Rules: 3-4 tags, 3-4 impact items, 3-4 signals, 4-8 sources. Every claim must trace to a search result. No padding.`;
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res){
   // CORS — allow all origins (lock this down to your domain in production)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
