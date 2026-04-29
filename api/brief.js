@@ -1,18 +1,13 @@
 /**
  * POST /api/brief
- * Body: { mode: 'morning' | 'aftermarket', marketState: { spot, rd, rf, ois5, basis } }
- * Returns: { brief: {...}, searchCount: N, generatedAt: ISO, cached: false }
- *
- * Calls Anthropic claude-sonnet with web_search tool enabled.
- * Runs server-side — no CORS issues from the browser.
+ * Body: { mode: 'morning' | 'aftermarket', marketState: { spot, rd, rf, ois5, basis }, force: boolean }
+ * Returns: { brief, searchCount, generatedAt, cached }
  */
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 4000;
-const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
-// In-memory cache (persists across warm invocations on same instance)
 const cache = { morning: null, aftermarket: null };
 
 function buildSystemPrompt(mode, state) {
@@ -24,7 +19,7 @@ function buildSystemPrompt(mode, state) {
   const rateDiff = (parseFloat(rd) - parseFloat(rf)).toFixed(2);
 
   const stateBlock = `Today: ${today} (IST)
-USD/INR spot: ${spot ?? 'unknown'} | MIBOR proxy (r_d): ${rd}% | SOFR proxy (r_f): ${rf}%
+USD/INR spot: ${spot || 'unknown'} | MIBOR proxy (r_d): ${rd}% | SOFR proxy (r_f): ${rf}%
 INR OIS 5Y: ${ois5}% | USD/INR CCS basis: ${basis}bp | Rate differential: ${rateDiff}%
 
 STRUCTURING CATALOGUE:
@@ -37,21 +32,21 @@ Knock-Out Forward, Knock-In Forward, IRS Pay Fixed, IRS Receive Fixed, Cross Cur
 
 ${stateBlock}
 
-RESEARCH TASK — run ALL of these searches before synthesising:
-1. "Indian rupee USD INR today" — overnight USD/INR move, RBI fixing, FII/FPI flows
-2. "RBI monetary policy MIBOR OIS G-sec yield today" — domestic rates
-3. "Fed FOMC dollar index US Treasury yield overnight" — global rates driving INR
-4. "India inflation CPI RBI repo rate" — macro drivers
-5. "Mint Economic Times India markets today" — Indian financial press coverage
-6. "Zerodha Pulse markets today" — aggregated Indian markets view
-7. Any RBI/SEBI circulars or policy announcements affecting FX derivatives
+RESEARCH TASK - run ALL of these searches before synthesising:
+1. "Indian rupee USD INR today" - overnight USD/INR move, RBI fixing, FII flows
+2. "RBI monetary policy MIBOR OIS G-sec yield today" - domestic rates
+3. "Fed FOMC dollar index US Treasury yield overnight" - global rates
+4. "India inflation CPI RBI repo rate" - macro drivers
+5. "Mint Economic Times India markets today" - Indian press
+6. "Zerodha Pulse markets today" - aggregated Indian markets view
+7. Any RBI/SEBI circulars affecting FX derivatives
 
-After researching, synthesise into a structuring desk brief. Use confident trader voice. Cite specific magnitudes from your search results. If a search returns nothing concrete, leave fewer items rather than inventing content.
+After researching, synthesise into a structuring desk brief. Use confident trader voice. Reference specific magnitudes from your search. Do not fabricate - if a search returns nothing for a slot, leave fewer items.
 
-Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
+Return ONLY this JSON object - no preamble, no markdown fences, no extra text:
 {
   "headline": "<one-line market call 14-22 words. Use *italics* for the key driver>",
-  "narrative": "<2-3 sentences: direction, key driver, structural implication for the desk. ~70 words with specific data points from your search>",
+  "narrative": "<2-3 sentences: direction, key driver, structural implication. ~70 words with specific data points>",
   "tags": [{"label": "<short tag>", "tone": "bullish|bearish|neutral"}],
   "impactScan": [
     {
@@ -60,8 +55,8 @@ Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
       "headline": "<5-9 word issue summary>",
       "description": "<2 sentences: what happened, structuring implication. ~40 words>",
       "products": ["<product name from catalogue>"],
-      "action": "<concrete desk action this morning. ~25 words>",
-      "sourceRef": "<e.g. 'Mint, today' or 'RBI press release 24 Apr'>"
+      "action": "<concrete desk action. ~25 words>",
+      "sourceRef": "<e.g. Mint today or RBI press release>"
     }
   ],
   "signals": [
@@ -69,61 +64,60 @@ Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
       "title": "<3-6 word signal>",
       "detail": "<15-20 words with specific magnitude>",
       "direction": "up|dn|neu",
-      "mag": "<e.g. +18bp or -1.4% or wider>",
+      "mag": "<e.g. +18bp or -1.4%>",
       "sourceRef": "<short citation>"
     }
   ],
   "sources": [
     {
-      "label": "<publication name>",
-      "title": "<article headline>",
+      "label": "<publication>",
+      "title": "<headline>",
       "url": "<full URL>",
-      "date": "<publication date>"
+      "date": "<date>"
     }
   ]
 }
 
-Rules: 3-4 tags, 3-4 impact scan items, 3-4 signals, 4-8 sources. Every item must trace to a search result. No padding.`;
+Rules: 3-4 tags, 3-4 impact scan items, 3-4 signals, 4-8 sources. Every item must trace to a search result.`;
   }
 
-  // aftermarket
   return `You are a senior FX/rates structurer at an Indian bank writing the AFTER-MARKET REPORT after Indian markets close, in the style of Zerodha Aftermarket Report.
 
 ${stateBlock}
 
-RESEARCH TASK — run ALL of these searches before synthesising:
-1. "USD INR today close RBI reference rate" — today's exact INR close and move
-2. "NIFTY SENSEX today close FII flows" — equity + flow context
-3. "India G-sec yield MIBOR OIS today" — domestic rates today
-4. "Zerodha aftermarket report today" — Zerodha's own daily wrap
-5. "RBI OMO liquidity today" — central bank operations today
-6. "dollar index crude oil gold today" — global drivers affecting INR
-7. "India markets wrap Mint Economic Times today" — press coverage of today's session
+RESEARCH TASK - run ALL of these searches:
+1. "USD INR today close RBI reference rate" - today's INR close and move
+2. "NIFTY SENSEX today close FII flows" - equity and flow context
+3. "India G-sec yield MIBOR OIS today" - domestic rates today
+4. "Zerodha aftermarket report today" - Zerodha daily wrap
+5. "RBI OMO liquidity today" - central bank operations
+6. "dollar index crude oil gold today" - global drivers
+7. "India markets wrap Mint Economic Times today" - press coverage
 
-After researching, write the after-market report. Be specific about today's actual moves with magnitudes. Set up the desk for tomorrow. Reflective, explanatory tone. If a search returns nothing concrete, leave fewer items.
+Synthesise into a post-market report. Be specific about today's actual moves with magnitudes. Set up the desk for tomorrow. Do not fabricate.
 
-Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
+Return ONLY this JSON object - no preamble, no markdown fences:
 {
-  "headline": "<one-line session wrap 14-22 words. Use *italics* for the key driver>",
-  "narrative": "<3 sentences: what moved today, why, what to watch tomorrow. ~80 words with specific magnitudes from your search>",
+  "headline": "<one-line session wrap 14-22 words. Use *italics* for key driver>",
+  "narrative": "<3 sentences: what moved today, why, what to watch tomorrow. ~80 words with magnitudes>",
   "tags": [{"label": "<short tag>", "tone": "bullish|bearish|neutral"}],
   "impactScan": [
     {
       "severity": "high|med|low",
       "category": "REGULATORY|MARKET|POLICY|CREDIT|GEOPOLITICAL",
-      "headline": "<5-9 word issue summary from today>",
-      "description": "<2 sentences: today's event, implication going forward. ~40 words>",
-      "products": ["<product name from catalogue>"],
-      "action": "<desk action for tonight or tomorrow's open. ~25 words>",
+      "headline": "<5-9 word issue summary>",
+      "description": "<2 sentences: today event and implication. ~40 words>",
+      "products": ["<product name>"],
+      "action": "<desk action for tonight or tomorrow open. ~25 words>",
       "sourceRef": "<citation>"
     }
   ],
   "signals": [
     {
       "title": "<3-6 word signal>",
-      "detail": "<today's actual move with magnitude and driver, 15-20 words>",
+      "detail": "<today actual move with magnitude and driver, 15-20 words>",
       "direction": "up|dn|neu",
-      "mag": "<actual move e.g. -34p or +12bp>",
+      "mag": "<actual move>",
       "sourceRef": "<citation>"
     }
   ],
@@ -137,11 +131,10 @@ Return ONLY this JSON object — no preamble, no markdown fences, no extra text:
   ]
 }
 
-Rules: 3-4 tags, 3-4 impact items, 3-4 signals, 4-8 sources. Every claim must trace to a search result. No padding.`;
+Rules: 3-4 tags, 3-4 impact items, 3-4 signals, 4-8 sources. Every claim must trace to a search result.`;
 }
 
-module.exports = async function handler(req, res){
-  // CORS — allow all origins (lock this down to your domain in production)
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -157,28 +150,30 @@ module.exports = async function handler(req, res){
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: 'ANTHROPIC_API_KEY environment variable not set. Add it in Vercel dashboard → Settings → Environment Variables.',
+      error: 'ANTHROPIC_API_KEY environment variable not set. Add it in Vercel dashboard > Settings > Environment Variables.',
     });
   }
 
   let body;
   try {
     body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  } catch {
+  } catch (e) {
     return res.status(400).json({ error: 'Invalid JSON body' });
   }
 
-  const mode = body?.mode === 'aftermarket' ? 'aftermarket' : 'morning';
-  const marketState = body?.marketState || {};
+  const mode = body && body.mode === 'aftermarket' ? 'aftermarket' : 'morning';
+  const marketState = (body && body.marketState) || {};
+  const force = body && body.force === true;
 
-  // Return cached if fresh
   const cached = cache[mode];
-  const useFresh = body?.force !== true;
-  if (useFresh && cached && (Date.now() - cached.generatedAt) < CACHE_TTL_MS) {
-    return res.status(200).json({ ...cached, cached: true });
+  if (!force && cached && (Date.now() - cached.generatedAt) < CACHE_TTL_MS) {
+    return res.status(200).json(Object.assign({}, cached, { cached: true }));
   }
 
   const systemPrompt = buildSystemPrompt(mode, marketState);
+  const today = new Date().toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
 
   let anthropicRes;
   try {
@@ -192,12 +187,12 @@ module.exports = async function handler(req, res){
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: MAX_TOKENS,
+        max_tokens: 4000,
         system: systemPrompt,
         messages: [
           {
             role: 'user',
-            content: `Generate today's ${mode === 'morning' ? 'morning brief' : 'after-market report'}. Run all required searches first. Today is ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
+            content: 'Generate today\'s ' + (mode === 'morning' ? 'morning brief' : 'after-market report') + '. Run all required searches first. Today is ' + today + '.',
           },
         ],
         tools: [
@@ -214,32 +209,36 @@ module.exports = async function handler(req, res){
   }
 
   if (!anthropicRes.ok) {
-    const errText = await anthropicRes.text().catch(() => '');
+    const errText = await anthropicRes.text().catch(function() { return ''; });
     return res.status(502).json({
-      error: `Anthropic API returned ${anthropicRes.status}`,
+      error: 'Anthropic API returned ' + anthropicRes.status,
       detail: errText.slice(0, 500),
     });
   }
 
-  const data = await anthropicRes.json();
+  let data;
+  try {
+    data = await anthropicRes.json();
+  } catch (e) {
+    return res.status(502).json({ error: 'Failed to parse Anthropic response' });
+  }
 
-  // Extract text blocks (final synthesis is in text blocks after tool calls)
   const textBlocks = (data.content || [])
-    .filter(c => c.type === 'text')
-    .map(c => c.text || '');
+    .filter(function(c) { return c.type === 'text'; })
+    .map(function(c) { return c.text || ''; });
   const fullText = textBlocks.join('\n').trim();
 
   if (!fullText) {
     return res.status(502).json({
-      error: 'Claude returned no text content. Web search may have returned no results.',
-      rawContent: (data.content || []).map(c => c.type),
+      error: 'Claude returned no text content.',
+      contentTypes: (data.content || []).map(function(c) { return c.type; }),
     });
   }
 
-  // Parse JSON from response
   const cleaned = fullText.replace(/```json|```/g, '').trim();
   const fb = cleaned.indexOf('{');
   const lb = cleaned.lastIndexOf('}');
+
   if (fb < 0 || lb < 0) {
     return res.status(502).json({
       error: 'No JSON found in Claude response',
@@ -257,21 +256,20 @@ module.exports = async function handler(req, res){
     });
   }
 
-  const searchCount = (data.content || []).filter(
-    c => c.type === 'server_tool_use' && c.name === 'web_search'
-  ).length;
+  const searchCount = (data.content || []).filter(function(c) {
+    return c.type === 'server_tool_use' && c.name === 'web_search';
+  }).length;
 
   const result = {
-    brief,
-    searchCount,
+    brief: brief,
+    searchCount: searchCount,
     generatedAt: Date.now(),
-    mode,
+    mode: mode,
     usage: data.usage,
     cached: false,
   };
 
-  // Cache
   cache[mode] = result;
 
   return res.status(200).json(result);
-}
+};
