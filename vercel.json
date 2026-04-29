@@ -2,7 +2,7 @@
   "version": 2,
   "functions": {
     "api/brief.js": {
-      "maxDuration": 60
+      "maxDuration": 600
     }
   },
   "headers": [
